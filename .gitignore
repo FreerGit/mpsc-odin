@@ -1,0 +1,5 @@
+# Build location
+target/*
+
+# Taskfile cache
+.task

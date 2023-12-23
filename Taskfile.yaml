@@ -1,0 +1,33 @@
+version: 3
+
+tasks:
+  build:
+    cmds:
+      - odin build src/ -out:target/mpsc -debug -o:none
+    sources:
+      - ./src/**/*.odin
+    generates:
+      - target/mpsc
+    silent: true
+
+  run:
+    cmds:
+      - ./target/mpsc
+    deps:
+      - build
+    silent: true
+
+  test:
+    cmds:
+      - odin test src/ -out:target/mpsc_test
+    sources:
+      - ./src/**/*.odin
+    generates:
+      - target/mpsc
+
+  clean:
+    cmds:
+      - rm -r ./target/*
+
+    
+
