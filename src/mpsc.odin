@@ -227,3 +227,135 @@ unordered_push_get_pop :: proc(t: ^testing.T) {
 
     testing.expect(t, is_empty(&queue))
 }
+
+@(private)
+assert_poll_result :: proc(state: PollState, node: ^Node, in_state: PollState) -> bool {
+    if in_state == .Item {
+        return state == in_state && node != nil
+    } else {
+        return state == in_state && node == nil
+    }
+}
+
+@(test)
+partial_push_poll :: proc(t: ^testing.T) {
+    elements: [3]Element
+    prevs: [3]^Node
+    queue: Queue
+    init(&queue)
+
+    for ele, idx in &elements {
+        ele.id = 1
+    }
+
+    testing.expect(t, assert_poll_result(poll(&queue), .Empty))
+    testing.expect(t, is_empty(&queue))
+
+    push(&queue, &elements[0].node)
+    testing.expect(t, !is_empty(&queue))
+    
+    testing.expect(t, assert_poll_result(poll(&queue), .Item))
+
+    testing.expect(t, assert_poll_result(poll(&queue), .Empty))
+
+    push(&queue, &elements[0].node)
+    push(&queue, &elements[1].node)
+    testing.expect(t, !is_empty(&queue))
+    
+    testing.expect(t, assert_poll_result(poll(&queue), .Item))
+    testing.expect(t, !is_empty(&queue))
+    
+    testing.expect(t, assert_poll_result(poll(&queue), .Item))
+    testing.expect(t, is_empty(&queue))
+
+    testing.expect(t, assert_poll_result(poll(&queue), .Empty))
+    testing.expect(t, is_empty(&queue))
+
+    sync.atomic_store(&elements[0].node.next, nil)
+    prevs[0] = sync.atomic_load(&queue.head)
+    sync.atomic_store(&queue.head, &elements[0].node)
+    testing.expect(t, assert_poll_result(poll(&queue), .Retry))
+    testing.expect(t, assert_poll_result(poll(&queue), .Retry))
+
+    sync.atomic_store(&prevs[0].next, &elements[0].node)
+    testing.expect(t, assert_poll_result(poll(&queue), .Item))
+    testing.expect(t, assert_poll_result(poll(&queue), .Empty))
+
+    push(&queue, &elements[0].node)
+    push(&queue, &elements[1].node)
+    sync.atomic_store(&elements[2].node.next, nil)
+    prevs[2] = sync.atomic_load(&queue.head)
+    sync.atomic_store(&queue.head, &elements[2].node)
+    testing.expect(t, assert_poll_result(poll(&queue), .Item))
+    testing.expect(t, assert_poll_result(poll(&queue), .Retry))
+    testing.expect(t, assert_poll_result(poll(&queue), .Retry))
+
+    sync.atomic_store(&prevs[2].next, &elements[2].node)
+    testing.expect(t, assert_poll_result(poll(&queue), .Item))
+    testing.expect(t, assert_poll_result(poll(&queue), .Item))
+    testing.expect(t, assert_poll_result(poll(&queue), .Empty))
+
+    push(&queue, &elements[0].node)
+
+    tail := sync.atomic_load(&queue.tail)
+    next := sync.atomic_load(&tail.next)
+    head: ^Node
+    node: ^Node
+    is_done := false
+
+    if tail == &queue.stub {
+        if next != nil {
+            sync.atomic_store(&queue.tail, next)
+            tail = next
+            next = sync.atomic_load(&tail.next)
+        } else {
+            head = sync.atomic_load(&queue.head)
+            if tail != head {
+                is_done = true
+            } else {
+                is_done = true
+            }
+        }
+    }
+
+    if next != nil {
+        sync.atomic_store(&queue.tail, next)
+        is_done = true
+        node = tail
+    }
+
+    head = sync.atomic_load(&queue.head)
+    if tail != head {
+        is_done = true
+    }
+
+    testing.expect(t, !is_done)
+
+    sync.atomic_store(&elements[1].node.next, nil)
+    prevs[1] = sync.atomic_load(&queue.head)
+    sync.atomic_store(&queue.head, &elements[1].node)
+
+    push(&queue, &queue.stub)
+
+    poll_state := PollState.Retry
+
+    next = sync.atomic_load( &tail.next)
+    if next != nil {
+        sync.atomic_store(&queue.tail, next)
+        poll_state := PollState.Item
+        node = tail
+    }
+
+    testing.expect(t, poll_state == PollState.Retry)
+
+    sync.atomic_store(&prevs[1].next, &elements[1].node)
+    state, poll_node := poll(&queue)
+    testing.expect(t, assert_poll_result(state, poll_node, .Item))
+    testing.expect(t, &elements[0].node == poll_node)
+    state, poll_node = poll(&queue)
+    testing.expect(t, assert_poll_result(state, poll_node, .Item))
+    testing.expect(t, &elements[1].node == poll_node)
+    state, poll_node = poll(&queue)
+    testing.expect(t, assert_poll_result(state, poll_node, .Empty))
+}
+
