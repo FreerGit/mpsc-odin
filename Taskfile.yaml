@@ -17,3 +17,17 @@ tasks:
       - build
     silent: true
 
+  test:
+    cmds:
+      - odin test src/ -out:target/mpsc_test
+    sources:
+      - ./src/**/*.odin
+    generates:
+      - target/mpsc
+
+  clean:
+    cmds:
+      - rm -r ./target/*
+
+    
+
