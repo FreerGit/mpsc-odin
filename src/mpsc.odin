@@ -4,6 +4,7 @@ import "core:log"
 import "core:sync"
 import "core:reflect"
 import "core:testing"
+import "core:os"
 
 
 PollState :: enum {
@@ -32,11 +33,29 @@ push :: proc(q: ^Queue, node: ^Node) {
     push_ordered(q, node, node)
 }
 
+// Note that first and lats must be linked appropiately by the user
 push_ordered :: proc(q: ^Queue, first: ^Node, last: ^Node) {
     sync.atomic_store(&last.next, nil)
     prev := sync.atomic_load(&q.head)
     sync.atomic_store(&q.head,last) 
     sync.atomic_store(&prev.next, first)
+}
+
+push_unordered :: proc(q: ^Queue, nodes: []^Node) {
+    if len(nodes) == 0 {
+        return
+    }
+
+    first := nodes[0]
+    last := nodes[len(nodes) - 1]
+
+    i :=  0
+    for i < len(nodes) - 1 {
+        sync.atomic_store(&nodes[i].next, nodes[i+1])
+        i += 1
+    }
+
+    push_ordered(q, first, last)
 }
 
 is_empty :: proc(q: ^Queue) -> bool {
@@ -177,3 +196,34 @@ ordered_push_get_pop :: proc(t: ^testing.T) {
     testing.expect(t,is_empty(&queue))
 }
 
+@(test)
+unordered_push_get_pop :: proc(t: ^testing.T) {
+    elements : [1000]Element
+    nodes : [1000]^Node
+    queue : Queue
+    init(&queue)
+
+    for ele, idx in &elements {
+        ele.id = idx
+        nodes[idx] = &ele.node    
+    }
+
+    push_unordered(&queue, nodes[:])
+    testing.expect(t, !is_empty(&queue))
+
+    node := get_tail(&queue)
+    for i := 0; node != nil; i += 1 {
+        testing.expect(t, &elements[i].node == node)
+        node = get_next(&queue, node)
+    }
+
+    testing.expect(t, !is_empty(&queue))
+
+    node = pop(&queue)
+    for i := 0; node != nil; i += 1 {
+        testing.expect(t, &elements[i].node == node)
+        node = pop(&queue)
+    }
+
+    testing.expect(t, is_empty(&queue))
+}
