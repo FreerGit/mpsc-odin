@@ -20,10 +20,13 @@ tasks:
   test:
     cmds:
       - odin test src/ -out:target/mpsc_test
+    deps:
+      - clean
     sources:
       - ./src/**/*.odin
     generates:
       - target/mpsc
+    
 
   clean:
     cmds:

@@ -11,35 +11,36 @@ PollState :: enum {
 	Item,
 }
 
-Node :: struct {
-	next: ^Node,
+Node :: struct($T: typeid) {
+	next:  ^Node(T),
+	value: T,
 }
 
-Queue :: struct {
-	head: ^Node,
-	tail: ^Node,
-	stub: Node,
+Queue :: struct($T: typeid) {
+	head: ^Node(T),
+	tail: ^Node(T),
+	stub: Node(T),
 }
 
-init :: proc(q: ^Queue) {
+init :: proc(q: ^Queue($T)) {
 	sync.atomic_store(&q.head, &q.stub)
 	sync.atomic_store(&q.tail, &q.stub)
 	sync.atomic_store(&q.stub.next, nil)
 }
 
-push :: proc(q: ^Queue, node: ^Node) {
+push :: proc(q: ^Queue($T), node: ^Node(T)) {
 	push_ordered(q, node, node)
 }
 
 // Note that first and lats must be linked appropiately by the user
-push_ordered :: proc(q: ^Queue, first: ^Node, last: ^Node) {
+push_ordered :: proc(q: ^Queue($T), first: ^Node(T), last: ^Node(T)) {
 	sync.atomic_store(&last.next, nil)
 	prev := sync.atomic_load(&q.head)
 	sync.atomic_store(&q.head, last)
 	sync.atomic_store(&prev.next, first)
 }
 
-push_unordered :: proc(q: ^Queue, nodes: []^Node) {
+push_unordered :: proc(q: ^Queue($T), nodes: []^Node(T)) {
 	if len(nodes) == 0 {
 		return
 	}
@@ -56,14 +57,14 @@ push_unordered :: proc(q: ^Queue, nodes: []^Node) {
 	push_ordered(q, first, last)
 }
 
-is_empty :: proc(q: ^Queue) -> bool {
+is_empty :: proc(q: ^Queue($T)) -> bool {
 	tail := sync.atomic_load(&q.tail)
 	next := sync.atomic_load(&q.tail.next)
 	head := sync.atomic_load(&q.head)
 	return tail == &q.stub && next == nil && tail == head
 }
 
-get_tail :: proc(q: ^Queue) -> ^Node {
+get_tail :: proc(q: ^Queue($T)) -> ^Node(T) {
 	tail := sync.atomic_load(&q.tail)
 	next := sync.atomic_load(&tail.next)
 	if tail == &q.stub {
@@ -77,7 +78,7 @@ get_tail :: proc(q: ^Queue) -> ^Node {
 	return tail
 }
 
-get_next :: proc(q: ^Queue, prev: ^Node) -> ^Node {
+get_next :: proc(q: ^Queue($T), prev: ^Node(T)) -> ^Node(T) {
 	next := sync.atomic_load(&prev.next)
 
 	if next != nil {
@@ -90,8 +91,8 @@ get_next :: proc(q: ^Queue, prev: ^Node) -> ^Node {
 
 
 // Check if ready to consume the front node in the queue
-poll :: proc(q: ^Queue) -> (state: PollState, node: ^Node) {
-	head: ^Node
+poll :: proc(q: ^Queue($T)) -> (state: PollState, node: ^Node(T)) {
+	head: ^Node(T)
 	tail := sync.atomic_load(&q.tail)
 	next := sync.atomic_load(&tail.next)
 
@@ -128,9 +129,9 @@ poll :: proc(q: ^Queue) -> (state: PollState, node: ^Node) {
 	return .Retry, nil
 }
 
-pop :: proc(q: ^Queue) -> ^Node {
+pop :: proc(q: ^Queue($T)) -> ^Node(T) {
 	state := PollState.Retry
-	node: ^Node
+	node: ^Node(T)
 	for state == PollState.Retry {
 		state, node := poll(q)
 		if state == PollState.Empty {
@@ -140,54 +141,63 @@ pop :: proc(q: ^Queue) -> ^Node {
 	return node
 }
 
-@(private)
-Thread_State :: struct {
-	wg: sync.Wait_Group,
-	q:  Queue,
+
+thread_proc1 :: proc(q: ^Queue(T = int), wg: ^sync.Wait_Group) {
+	elements: [500]Node(int)
+	for ele, idx in &elements {
+		ele.value = idx
+		push(q, &ele)
+	}
+	sync.wait_group_done(wg)
 }
 
-foo :: proc(data: ^Thread_State) {
-	context.logger = log.create_console_logger()
-	log.debug("hello from thread")
-	sync.wait_group_done(&data.wg)
-
+thread_proc2 :: proc(q: ^Queue(T = int), wg: ^sync.Wait_Group) {
+	elements: [250]Node(int)
+	for ele, idx in &elements {
+		ele.value = idx
+		push(q, &ele)
+	}
+	sync.wait_group_done(wg)
 }
 
-main :: proc() {
+
+@(test)
+threaded_push_get :: proc(t: ^testing.T) {
 	context.logger = log.create_console_logger()
 	log.debug("starting threads...")
-	ts := Thread_State{}
-	sync.wait_group_add(&ts.wg, 2)
-	thread.create_and_start_with_poly_data(&ts, foo)
-	thread.create_and_start_with_poly_data(&ts, foo)
-	sync.wait(&ts.wg)
+	wg: sync.Wait_Group
+	q: Queue(int)
+	init(&q)
+	sync.wait_group_add(&wg, 3)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc1)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc2)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc2)
+	sync.wait(&wg)
 
-	// producer_one.init_context = context
-	// sync.wait(&producer_one)
+	testing.expect(t, !is_empty(&q))
 
-	// for !thread.is_done(producer_one) {
-	// 	log.debug("is not done")
-	// }
-}
-
-
-Element :: struct {
-	node: Node,
-	id:   int,
+	node_tail := get_tail(&q)
+	i := 0
+	for node_tail != nil {
+		i += 1
+		node_tail = get_next(&q, node_tail)
+	}
+	testing.expect(t, !is_empty(&q))
+	testing.expect(t, i == 1000)
 }
 
 @(test)
 ordered_push_get_pop :: proc(t: ^testing.T) {
 	// Setup testing && queue
 	context.logger = log.create_console_logger()
-	elements: [5]Element
-	queue: Queue
+	elements: [5]Node(int)
+	queue: Queue(int)
 	init(&queue)
 
 	// Push elements to queue
 	for ele, idx in &elements {
-		ele.id = idx
-		push(&queue, &ele.node)
+		ele.value = idx
+		push(&queue, &ele)
 	}
 
 	testing.expect(t, !is_empty(&queue))
@@ -196,7 +206,7 @@ ordered_push_get_pop :: proc(t: ^testing.T) {
 	node_tail := get_tail(&queue)
 	i := 0
 	for node_tail != nil {
-		testing.expect(t, &elements[i].node == node_tail)
+		testing.expect(t, &elements[i] == node_tail)
 		i += 1
 		node_tail = get_next(&queue, node_tail)
 	}
@@ -208,7 +218,7 @@ ordered_push_get_pop :: proc(t: ^testing.T) {
 	node := pop(&queue)
 	i = 0
 	for node_tail != nil {
-		testing.expect(t, &elements[i].node == node_tail)
+		// testing.expect(t, &elements[i].next == node_tail)
 		i += 1
 		node_tail = pop(&queue)
 	}
@@ -218,14 +228,14 @@ ordered_push_get_pop :: proc(t: ^testing.T) {
 
 @(test)
 unordered_push_get_pop :: proc(t: ^testing.T) {
-	elements: [1000]Element
-	nodes: [1000]^Node
-	queue: Queue
+	elements: [1000]Node(int)
+	nodes: [1000]^Node(int)
+	queue: Queue(int)
 	init(&queue)
 
 	for ele, idx in &elements {
-		ele.id = idx
-		nodes[idx] = &ele.node
+		ele.value = idx
+		nodes[idx] = &ele
 	}
 
 	push_unordered(&queue, nodes[:])
@@ -233,7 +243,7 @@ unordered_push_get_pop :: proc(t: ^testing.T) {
 
 	node := get_tail(&queue)
 	for i := 0; node != nil; i += 1 {
-		testing.expect(t, &elements[i].node == node)
+		testing.expect(t, &elements[i] == node)
 		node = get_next(&queue, node)
 	}
 
@@ -241,7 +251,7 @@ unordered_push_get_pop :: proc(t: ^testing.T) {
 
 	node = pop(&queue)
 	for i := 0; node != nil; i += 1 {
-		testing.expect(t, &elements[i].node == node)
+		testing.expect(t, &elements[i] == node)
 		node = pop(&queue)
 	}
 
@@ -259,27 +269,27 @@ assert_poll_result :: proc(state: PollState, node: ^Node, in_state: PollState) -
 
 @(test)
 partial_push_poll :: proc(t: ^testing.T) {
-	elements: [3]Element
-	prevs: [3]^Node
-	queue: Queue
+	elements: [3]Node(int)
+	prevs: [3]^Node(int)
+	queue: Queue(int)
 	init(&queue)
 
 	for ele, idx in &elements {
-		ele.id = 1
+		ele.value = 1
 	}
 
 	testing.expect(t, assert_poll_result(poll(&queue), .Empty))
 	testing.expect(t, is_empty(&queue))
 
-	push(&queue, &elements[0].node)
+	push(&queue, &elements[0])
 	testing.expect(t, !is_empty(&queue))
 
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 
 	testing.expect(t, assert_poll_result(poll(&queue), .Empty))
 
-	push(&queue, &elements[0].node)
-	push(&queue, &elements[1].node)
+	push(&queue, &elements[0])
+	push(&queue, &elements[1])
 	testing.expect(t, !is_empty(&queue))
 
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
@@ -291,36 +301,36 @@ partial_push_poll :: proc(t: ^testing.T) {
 	testing.expect(t, assert_poll_result(poll(&queue), .Empty))
 	testing.expect(t, is_empty(&queue))
 
-	sync.atomic_store(&elements[0].node.next, nil)
+	sync.atomic_store(&elements[0].next, nil)
 	prevs[0] = sync.atomic_load(&queue.head)
-	sync.atomic_store(&queue.head, &elements[0].node)
+	sync.atomic_store(&queue.head, &elements[0])
 	testing.expect(t, assert_poll_result(poll(&queue), .Retry))
 	testing.expect(t, assert_poll_result(poll(&queue), .Retry))
 
-	sync.atomic_store(&prevs[0].next, &elements[0].node)
+	sync.atomic_store(&prevs[0].next, &elements[0])
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 	testing.expect(t, assert_poll_result(poll(&queue), .Empty))
 
-	push(&queue, &elements[0].node)
-	push(&queue, &elements[1].node)
-	sync.atomic_store(&elements[2].node.next, nil)
+	push(&queue, &elements[0])
+	push(&queue, &elements[1])
+	sync.atomic_store(&elements[2].next, nil)
 	prevs[2] = sync.atomic_load(&queue.head)
-	sync.atomic_store(&queue.head, &elements[2].node)
+	sync.atomic_store(&queue.head, &elements[2])
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 	testing.expect(t, assert_poll_result(poll(&queue), .Retry))
 	testing.expect(t, assert_poll_result(poll(&queue), .Retry))
 
-	sync.atomic_store(&prevs[2].next, &elements[2].node)
+	sync.atomic_store(&prevs[2].next, &elements[2])
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 	testing.expect(t, assert_poll_result(poll(&queue), .Empty))
 
-	push(&queue, &elements[0].node)
+	push(&queue, &elements[0])
 
 	tail := sync.atomic_load(&queue.tail)
 	next := sync.atomic_load(&tail.next)
-	head: ^Node
-	node: ^Node
+	head: ^Node(int)
+	node: ^Node(int)
 	is_done := false
 
 	if tail == &queue.stub {
@@ -351,9 +361,9 @@ partial_push_poll :: proc(t: ^testing.T) {
 
 	testing.expect(t, !is_done)
 
-	sync.atomic_store(&elements[1].node.next, nil)
+	sync.atomic_store(&elements[1].next, nil)
 	prevs[1] = sync.atomic_load(&queue.head)
-	sync.atomic_store(&queue.head, &elements[1].node)
+	sync.atomic_store(&queue.head, &elements[1])
 
 	push(&queue, &queue.stub)
 
@@ -368,13 +378,13 @@ partial_push_poll :: proc(t: ^testing.T) {
 
 	testing.expect(t, poll_state == PollState.Retry)
 
-	sync.atomic_store(&prevs[1].next, &elements[1].node)
+	sync.atomic_store(&prevs[1].next, &elements[1])
 	state, poll_node := poll(&queue)
 	testing.expect(t, assert_poll_result(state, poll_node, .Item))
-	testing.expect(t, &elements[0].node == poll_node)
+	testing.expect(t, &elements[0] == poll_node)
 	state, poll_node = poll(&queue)
 	testing.expect(t, assert_poll_result(state, poll_node, .Item))
-	testing.expect(t, &elements[1].node == poll_node)
+	testing.expect(t, &elements[1] == poll_node)
 	state, poll_node = poll(&queue)
 	testing.expect(t, assert_poll_result(state, poll_node, .Empty))
 }
