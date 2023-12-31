@@ -20,17 +20,19 @@ tasks:
   test:
     cmds:
       - odin test src/ -out:target/mpsc_test
-    deps:
-      - clean
+      - task clean
     sources:
       - ./src/**/*.odin
     generates:
       - target/mpsc
+    silent: true
+    
     
 
   clean:
     cmds:
       - rm -r ./target/*
+    silent: true
 
     
 
