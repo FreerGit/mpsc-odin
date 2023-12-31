@@ -19,6 +19,7 @@ tasks:
 
   test:
     cmds:
+      - clear
       - odin test src/ -out:target/mpsc_test
       - task clean
     sources:

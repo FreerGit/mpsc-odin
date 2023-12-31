@@ -1,6 +1,6 @@
 package mpsc
 
-import "core:log"
+import "core:intrinsics"
 import "core:sync"
 import "core:testing"
 import "core:thread"
@@ -24,8 +24,8 @@ Queue :: struct($T: typeid) {
 
 init :: proc(q: ^Queue($T)) {
 	sync.atomic_store(&q.head, &q.stub)
-	sync.atomic_store(&q.tail, &q.stub)
-	sync.atomic_store(&q.stub.next, nil)
+	intrinsics.atomic_store(&q.tail, &q.stub)
+	intrinsics.atomic_store(&q.stub.next, nil)
 }
 
 push :: proc(q: ^Queue($T), node: ^Node(T)) {
@@ -34,10 +34,14 @@ push :: proc(q: ^Queue($T), node: ^Node(T)) {
 
 // Note that first and lats must be linked appropiately by the user
 push_ordered :: proc(q: ^Queue($T), first: ^Node(T), last: ^Node(T)) {
-	sync.atomic_store(&last.next, nil)
-	prev := sync.atomic_load(&q.head)
-	sync.atomic_store(&q.head, last)
-	sync.atomic_store(&prev.next, first)
+	intrinsics.atomic_store(&last.next, nil)
+	for {
+		prev, b := intrinsics.atomic_compare_exchange_weak(&q.head, q.head, last)
+		if b {
+			intrinsics.atomic_store(&prev.next, first)
+			break
+		}
+	}
 }
 
 push_unordered :: proc(q: ^Queue($T), nodes: []^Node(T)) {
@@ -50,7 +54,7 @@ push_unordered :: proc(q: ^Queue($T), nodes: []^Node(T)) {
 
 	i := 0
 	for i < len(nodes) - 1 {
-		sync.atomic_store(&nodes[i].next, nodes[i + 1])
+		intrinsics.atomic_store(&nodes[i].next, nodes[i + 1])
 		i += 1
 	}
 
@@ -58,18 +62,18 @@ push_unordered :: proc(q: ^Queue($T), nodes: []^Node(T)) {
 }
 
 is_empty :: proc(q: ^Queue($T)) -> bool {
-	tail := sync.atomic_load(&q.tail)
-	next := sync.atomic_load(&q.tail.next)
-	head := sync.atomic_load(&q.head)
+	tail := intrinsics.atomic_load(&q.tail)
+	next := intrinsics.atomic_load(&q.tail.next)
+	head := intrinsics.atomic_load(&q.head)
 	return tail == &q.stub && next == nil && tail == head
 }
 
 get_tail :: proc(q: ^Queue($T)) -> ^Node(T) {
-	tail := sync.atomic_load(&q.tail)
-	next := sync.atomic_load(&tail.next)
+	tail := intrinsics.atomic_load(&q.tail)
+	next := intrinsics.atomic_load(&tail.next)
 	if tail == &q.stub {
 		if next != nil {
-			sync.atomic_store(&q.tail, next)
+			intrinsics.atomic_store(&q.tail, next)
 			tail = next
 		} else {
 			return nil
@@ -79,11 +83,11 @@ get_tail :: proc(q: ^Queue($T)) -> ^Node(T) {
 }
 
 get_next :: proc(q: ^Queue($T), prev: ^Node(T)) -> ^Node(T) {
-	next := sync.atomic_load(&prev.next)
+	next := intrinsics.atomic_load(&prev.next)
 
 	if next != nil {
 		if next == &q.stub {
-			next = sync.atomic_load(&next.next)
+			next = intrinsics.atomic_load(&next.next)
 		}
 	}
 	return next
@@ -93,36 +97,36 @@ get_next :: proc(q: ^Queue($T), prev: ^Node(T)) -> ^Node(T) {
 // Check if ready to consume the front node in the queue
 poll :: proc(q: ^Queue($T)) -> (state: PollState, node: ^Node(T)) {
 	head: ^Node(T)
-	tail := sync.atomic_load(&q.tail)
-	next := sync.atomic_load(&tail.next)
+	tail := intrinsics.atomic_load(&q.tail)
+	next := intrinsics.atomic_load(&tail.next)
 
 	if tail == &q.stub {
 		if next != nil {
-			sync.atomic_store(&q.tail, next)
+			intrinsics.atomic_store(&q.tail, next)
 			tail = next
-			next = sync.atomic_load(&tail.next)
+			next = intrinsics.atomic_load(&tail.next)
 		} else {
-			head = sync.atomic_load(&q.head)
+			head = intrinsics.atomic_load(&q.head)
 			if tail != head do return .Retry, nil
 			return .Empty, nil
 		}
 	}
 
 	if next != nil {
-		sync.atomic_store(&q.tail, next)
+		intrinsics.atomic_store(&q.tail, next)
 		return .Item, tail
 	}
 
-	head = sync.atomic_load(&q.head)
+	head = intrinsics.atomic_load(&q.head)
 	if tail != head {
 		return .Retry, nil
 	}
 
 	push(q, &q.stub)
 
-	next = sync.atomic_load(&tail.next)
+	next = intrinsics.atomic_load(&tail.next)
 	if next != nil {
-		sync.atomic_store(&q.tail, next)
+		intrinsics.atomic_store(&q.tail, next)
 		return .Item, tail
 	}
 
@@ -141,8 +145,8 @@ pop :: proc(q: ^Queue($T)) -> ^Node(T) {
 	return node
 }
 
-
-thread_proc1 :: proc(q: ^Queue(T = int), wg: ^sync.Wait_Group) {
+@(private)
+thread_proc :: proc(q: ^Queue(T = int), wg: ^sync.Wait_Group, how_many: int) {
 	elements: [500]Node(int)
 	for ele, idx in &elements {
 		ele.value = idx
@@ -151,45 +155,36 @@ thread_proc1 :: proc(q: ^Queue(T = int), wg: ^sync.Wait_Group) {
 	sync.wait_group_done(wg)
 }
 
-thread_proc2 :: proc(q: ^Queue(T = int), wg: ^sync.Wait_Group) {
-	elements: [250]Node(int)
-	for ele, idx in &elements {
-		ele.value = idx
-		push(q, &ele)
-	}
-	sync.wait_group_done(wg)
-}
-
-
 @(test)
 threaded_push_get :: proc(t: ^testing.T) {
-	context.logger = log.create_console_logger()
-	log.debug("starting threads...")
 	wg: sync.Wait_Group
 	q: Queue(int)
 	init(&q)
-	sync.wait_group_add(&wg, 3)
-	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc1)
-	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc2)
-	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc2)
+	sync.wait_group_add(&wg, 7)
+	thread.create_and_start_with_poly_data3(&q, &wg, 3000, thread_proc)
+	thread.create_and_start_with_poly_data3(&q, &wg, 2500, thread_proc)
+	thread.create_and_start_with_poly_data3(&q, &wg, 2000, thread_proc)
+	thread.create_and_start_with_poly_data3(&q, &wg, 1500, thread_proc)
+	thread.create_and_start_with_poly_data3(&q, &wg, 2000, thread_proc)
+	thread.create_and_start_with_poly_data3(&q, &wg, 2500, thread_proc)
+	thread.create_and_start_with_poly_data3(&q, &wg, 3000, thread_proc)
 	sync.wait(&wg)
 
-	testing.expect(t, !is_empty(&q))
-
 	node_tail := get_tail(&q)
-	i := 0
+	total := 0
+	xs := 0
 	for node_tail != nil {
-		i += 1
+		total += node_tail.value
+		xs += 1
 		node_tail = get_next(&q, node_tail)
 	}
-	testing.expect(t, !is_empty(&q))
-	testing.expect(t, i == 1000)
+
+	testing.expect(t, total == 873_250)
+	testing.expect(t, xs == 3500)
 }
 
 @(test)
 ordered_push_get_pop :: proc(t: ^testing.T) {
-	// Setup testing && queue
-	context.logger = log.create_console_logger()
 	elements: [5]Node(int)
 	queue: Queue(int)
 	init(&queue)
