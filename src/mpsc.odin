@@ -23,7 +23,7 @@ Queue :: struct($T: typeid) {
 }
 
 init :: proc(q: ^Queue($T)) {
-	sync.atomic_store(&q.head, &q.stub)
+	intrinsics.atomic_store(&q.head, &q.stub)
 	intrinsics.atomic_store(&q.tail, &q.stub)
 	intrinsics.atomic_store(&q.stub.next, nil)
 }
@@ -296,45 +296,45 @@ partial_push_poll :: proc(t: ^testing.T) {
 	testing.expect(t, assert_poll_result(poll(&queue), .Empty))
 	testing.expect(t, is_empty(&queue))
 
-	sync.atomic_store(&elements[0].next, nil)
-	prevs[0] = sync.atomic_load(&queue.head)
-	sync.atomic_store(&queue.head, &elements[0])
+	intrinsics.atomic_store(&elements[0].next, nil)
+	prevs[0] = intrinsics.atomic_load(&queue.head)
+	intrinsics.atomic_store(&queue.head, &elements[0])
 	testing.expect(t, assert_poll_result(poll(&queue), .Retry))
 	testing.expect(t, assert_poll_result(poll(&queue), .Retry))
 
-	sync.atomic_store(&prevs[0].next, &elements[0])
+	intrinsics.atomic_store(&prevs[0].next, &elements[0])
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 	testing.expect(t, assert_poll_result(poll(&queue), .Empty))
 
 	push(&queue, &elements[0])
 	push(&queue, &elements[1])
-	sync.atomic_store(&elements[2].next, nil)
-	prevs[2] = sync.atomic_load(&queue.head)
-	sync.atomic_store(&queue.head, &elements[2])
+	intrinsics.atomic_store(&elements[2].next, nil)
+	prevs[2] = intrinsics.atomic_load(&queue.head)
+	intrinsics.atomic_store(&queue.head, &elements[2])
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 	testing.expect(t, assert_poll_result(poll(&queue), .Retry))
 	testing.expect(t, assert_poll_result(poll(&queue), .Retry))
 
-	sync.atomic_store(&prevs[2].next, &elements[2])
+	intrinsics.atomic_store(&prevs[2].next, &elements[2])
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 	testing.expect(t, assert_poll_result(poll(&queue), .Item))
 	testing.expect(t, assert_poll_result(poll(&queue), .Empty))
 
 	push(&queue, &elements[0])
 
-	tail := sync.atomic_load(&queue.tail)
-	next := sync.atomic_load(&tail.next)
+	tail := intrinsics.atomic_load(&queue.tail)
+	next := intrinsics.atomic_load(&tail.next)
 	head: ^Node(int)
 	node: ^Node(int)
 	is_done := false
 
 	if tail == &queue.stub {
 		if next != nil {
-			sync.atomic_store(&queue.tail, next)
+			intrinsics.atomic_store(&queue.tail, next)
 			tail = next
-			next = sync.atomic_load(&tail.next)
+			next = intrinsics.atomic_load(&tail.next)
 		} else {
-			head = sync.atomic_load(&queue.head)
+			head = intrinsics.atomic_load(&queue.head)
 			if tail != head {
 				is_done = true
 			} else {
@@ -344,36 +344,36 @@ partial_push_poll :: proc(t: ^testing.T) {
 	}
 
 	if next != nil {
-		sync.atomic_store(&queue.tail, next)
+		intrinsics.atomic_store(&queue.tail, next)
 		is_done = true
 		node = tail
 	}
 
-	head = sync.atomic_load(&queue.head)
+	head = intrinsics.atomic_load(&queue.head)
 	if tail != head {
 		is_done = true
 	}
 
 	testing.expect(t, !is_done)
 
-	sync.atomic_store(&elements[1].next, nil)
-	prevs[1] = sync.atomic_load(&queue.head)
-	sync.atomic_store(&queue.head, &elements[1])
+	intrinsics.atomic_store(&elements[1].next, nil)
+	prevs[1] = intrinsics.atomic_load(&queue.head)
+	intrinsics.atomic_store(&queue.head, &elements[1])
 
 	push(&queue, &queue.stub)
 
 	poll_state := PollState.Retry
 
-	next = sync.atomic_load(&tail.next)
+	next = intrinsics.atomic_load(&tail.next)
 	if next != nil {
-		sync.atomic_store(&queue.tail, next)
+		intrinsics.atomic_store(&queue.tail, next)
 		poll_state := PollState.Item
 		node = tail
 	}
 
 	testing.expect(t, poll_state == PollState.Retry)
 
-	sync.atomic_store(&prevs[1].next, &elements[1])
+	intrinsics.atomic_store(&prevs[1].next, &elements[1])
 	state, poll_node := poll(&queue)
 	testing.expect(t, assert_poll_result(state, poll_node, .Item))
 	testing.expect(t, &elements[0] == poll_node)
