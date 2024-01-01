@@ -146,7 +146,7 @@ pop :: proc(q: ^Queue($T)) -> ^Node(T) {
 }
 
 @(private)
-thread_proc :: proc(q: ^Queue(T = int), wg: ^sync.Wait_Group, how_many: int) {
+thread_proc :: proc(q: ^Queue(T = int), wg: ^sync.Wait_Group) {
 	elements: [500]Node(int)
 	for ele, idx in &elements {
 		ele.value = idx
@@ -161,13 +161,13 @@ threaded_push_get :: proc(t: ^testing.T) {
 	q: Queue(int)
 	init(&q)
 	sync.wait_group_add(&wg, 7)
-	thread.create_and_start_with_poly_data3(&q, &wg, 3000, thread_proc)
-	thread.create_and_start_with_poly_data3(&q, &wg, 2500, thread_proc)
-	thread.create_and_start_with_poly_data3(&q, &wg, 2000, thread_proc)
-	thread.create_and_start_with_poly_data3(&q, &wg, 1500, thread_proc)
-	thread.create_and_start_with_poly_data3(&q, &wg, 2000, thread_proc)
-	thread.create_and_start_with_poly_data3(&q, &wg, 2500, thread_proc)
-	thread.create_and_start_with_poly_data3(&q, &wg, 3000, thread_proc)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc)
+	thread.create_and_start_with_poly_data2(&q, &wg, thread_proc)
 	sync.wait(&wg)
 
 	node_tail := get_tail(&q)
@@ -213,7 +213,6 @@ ordered_push_get_pop :: proc(t: ^testing.T) {
 	node := pop(&queue)
 	i = 0
 	for node_tail != nil {
-		// testing.expect(t, &elements[i].next == node_tail)
 		i += 1
 		node_tail = pop(&queue)
 	}
