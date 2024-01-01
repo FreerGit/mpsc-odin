@@ -28,8 +28,6 @@ tasks:
       - target/mpsc
     silent: true
     
-    
-
   clean:
     cmds:
       - rm -r ./target/*
